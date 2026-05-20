@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 
-const API_BASE = "http://localhost:5001";
+const API_BASE = "https://zillow-backend-oikm.onrender.com";
 
 const HOME_TYPES = [
   { value: "", label: "Any type" },
