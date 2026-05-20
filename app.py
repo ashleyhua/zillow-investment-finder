@@ -9,7 +9,8 @@ import os
 app = Flask(__name__)
 CORS(app)
 
-RAPIDAPI_KEY = "4f0582a6e6msh2d165d1d68a4a65p1faa49jsn8249d98dc1fe"
+import os
+RAPIDAPI_KEY = os.environ.get("RAPIDAPI_KEY", "")
 RAPIDAPI_HOST = "unofficial-zillow-api2.p.rapidapi.com"
 
 HEADERS = {
