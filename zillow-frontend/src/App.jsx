@@ -1,7 +1,16 @@
 import { useState, useRef, useEffect } from "react";
 
+// ─────────────────────────────────────────────────────────────
+// API Base URL
+// Points to the Flask backend hosted on Render.
+// All search requests go here.
+// ─────────────────────────────────────────────────────────────
 const API_BASE = "https://zillow-backend-oikm.onrender.com";
 
+// ─────────────────────────────────────────────────────────────
+// Dropdown Options
+// Static lists used to populate the filter dropdowns.
+// ─────────────────────────────────────────────────────────────
 const HOME_TYPES = [
   { value: "", label: "Any type" },
   { value: "Houses", label: "🏠 Houses" },
@@ -28,6 +37,12 @@ const BEDS    = ["Any", "1+", "2+", "3+", "4+", "5+"];
 const BATHS   = ["Any", "1+", "1.5+", "2+", "3+", "4+"];
 const PARKING = ["Any", "1+", "2+", "3+"];
 
+// ─────────────────────────────────────────────────────────────
+// Score Config
+// Maps each investment score to its display label, text color,
+// background color, border color, and map pin color.
+// Used by both the property cards and the map markers.
+// ─────────────────────────────────────────────────────────────
 const scoreConfig = {
   excellent: { label: "Excellent ≥1%", color: "#14532d", bg: "#dcfce7", border: "#86efac", pin: "#16a34a" },
   good:      { label: "Good ≥0.7%",    color: "#14532d", bg: "#f0fdf4", border: "#4ade80", pin: "#4ade80" },
@@ -36,11 +51,22 @@ const scoreConfig = {
   unknown:   { label: "No Rent Data",  color: "#374151", bg: "#f3f4f6", border: "#d1d5db", pin: "#9ca3af" },
 };
 
+// ─────────────────────────────────────────────────────────────
+// Formatter
+// Converts a number to a dollar string like "$235,000".
+// Returns "—" if the value is null or empty.
+// ─────────────────────────────────────────────────────────────
 function fmt(n) {
   if (n == null || n === "") return "—";
   return "$" + Number(n).toLocaleString();
 }
 
+// ─────────────────────────────────────────────────────────────
+// Shared Styles
+// Reusable style objects applied to inputs, selects, and labels
+// throughout the app so they all look consistent.
+// Explicit color values prevent dark mode from making text invisible.
+// ─────────────────────────────────────────────────────────────
 const inputStyle = {
   padding: "9px 12px", borderRadius: 8, border: "1px solid #d1d5db",
   fontSize: 14, background: "#fff", color: "#111827", outline: "none",
@@ -53,6 +79,11 @@ const labelStyle = {
   marginBottom: 5, display: "block",
 };
 
+// ─────────────────────────────────────────────────────────────
+// SectionLabel Component
+// A small gray uppercase heading used to separate sections
+// inside the advanced filters panel.
+// ─────────────────────────────────────────────────────────────
 function SectionLabel({ children }) {
   return (
     <div style={{
@@ -63,6 +94,12 @@ function SectionLabel({ children }) {
   );
 }
 
+// ─────────────────────────────────────────────────────────────
+// Toggle Component
+// A button that switches between active (dark) and inactive
+// (white) states. Used for boolean filters like Pool, Garage,
+// Waterfront, Foreclosure, etc.
+// ─────────────────────────────────────────────────────────────
 function Toggle({ label, value, onChange, icon }) {
   return (
     <button
@@ -81,13 +118,23 @@ function Toggle({ label, value, onChange, icon }) {
   );
 }
 
-// ── Map component using Leaflet ─────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
+// PropertyMap Component
+// Renders an interactive map using Leaflet.js (loaded dynamically
+// from a CDN) with OpenStreetMap tiles (free, no API key needed).
+//
+// Three useEffects handle different phases:
+//   1. Load the Leaflet CSS stylesheet once on mount
+//   2. Initialize the map once Leaflet JS is loaded
+//   3. Re-render all markers whenever the listings list changes
+//   4. Highlight the selected marker when a card is clicked
+// ─────────────────────────────────────────────────────────────
 function PropertyMap({ listings, selectedZpid, onSelectPin }) {
-  const mapRef = useRef(null);
-  const mapInstanceRef = useRef(null);
-  const markersRef = useRef({});
+  const mapRef = useRef(null);           // Reference to the map DOM element
+  const mapInstanceRef = useRef(null);   // Reference to the Leaflet map instance
+  const markersRef = useRef({});         // Dictionary of zpid → Leaflet marker
 
-  // Load Leaflet CSS once
+  // Load Leaflet CSS once so map tiles and controls render correctly
   useEffect(() => {
     if (!document.getElementById("leaflet-css")) {
       const link = document.createElement("link");
@@ -98,14 +145,15 @@ function PropertyMap({ listings, selectedZpid, onSelectPin }) {
     }
   }, []);
 
-  // Init map once
+  // Initialize the map once — load Leaflet JS if not already loaded,
+  // then create the map and add the OpenStreetMap tile layer
   useEffect(() => {
     if (mapInstanceRef.current || !mapRef.current) return;
 
     const initMap = () => {
       const L = window.L;
       if (!L || !mapRef.current) return;
-      // If already initialized, reuse
+      // Reset Leaflet's internal ID in case of double-mount (React dev mode)
       if (mapRef.current._leaflet_id) {
         mapRef.current._leaflet_id = null;
       }
@@ -121,6 +169,7 @@ function PropertyMap({ listings, selectedZpid, onSelectPin }) {
       }
     };
 
+    // If Leaflet is already loaded (e.g. from a previous render), init immediately
     if (window.L) {
       initMap();
     } else {
@@ -131,13 +180,18 @@ function PropertyMap({ listings, selectedZpid, onSelectPin }) {
     }
   }, []);
 
-  // Update markers when listings change
+  // Re-render all map markers whenever the listings list changes.
+  // Clears old markers first, then adds a colored circle pin
+  // for each listing that has valid coordinates.
+  // The pin color matches the investment score.
+  // Each pin has a popup with price, rent, ratio, and a Zillow link.
+  // Clicking a pin selects it and highlights the matching card.
   useEffect(() => {
     const L = window.L;
     if (!L || !mapInstanceRef.current) return;
     const map = mapInstanceRef.current;
 
-    // Clear old markers
+    // Remove all existing markers before adding new ones
     Object.values(markersRef.current).forEach(m => m.remove());
     markersRef.current = {};
 
@@ -150,6 +204,7 @@ function PropertyMap({ listings, selectedZpid, onSelectPin }) {
       const score = scoreConfig[p.score] || scoreConfig.unknown;
       const color = score.pin;
 
+      // Custom circular div icon colored by investment score
       const icon = L.divIcon({
         className: "",
         html: `<div style="
@@ -166,6 +221,7 @@ function PropertyMap({ listings, selectedZpid, onSelectPin }) {
 
       const marker = L.marker([p.latitude, p.longitude], { icon });
 
+      // Popup content shown when a pin is clicked
       const ratio = p.ratio != null ? p.ratio.toFixed(3) + "%" : "—";
       marker.bindPopup(`
         <div style="font-family:sans-serif;min-width:200px">
@@ -186,10 +242,12 @@ function PropertyMap({ listings, selectedZpid, onSelectPin }) {
       bounds.push([p.latitude, p.longitude]);
     });
 
+    // Zoom the map to fit all markers with some padding
     if (bounds.length) map.fitBounds(bounds, { padding: [30, 30] });
   }, [listings]);
 
-  // Highlight selected marker
+  // When a card is selected, make its map pin larger and open its popup.
+  // All other pins return to their normal size.
   useEffect(() => {
     const L = window.L;
     if (!L || !selectedZpid) return;
@@ -226,12 +284,23 @@ function PropertyMap({ listings, selectedZpid, onSelectPin }) {
   );
 }
 
-// ── Property Card ───────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
+// PropertyCard Component
+// Renders one listing as a card with photo, score badge, ratio,
+// address, price/zestimate/rent boxes, and property details.
+//
+// Clicking a card selects it (highlights its map pin) and opens
+// the Zillow listing in a new tab.
+//
+// If the card is selected, it gets a dark border and auto-scrolls
+// into view when the matching map pin is clicked.
+// ─────────────────────────────────────────────────────────────
 function PropertyCard({ p, isSelected, onSelect }) {
   const score = scoreConfig[p.score] || scoreConfig.unknown;
   const ratioDisplay = p.ratio != null ? p.ratio.toFixed(3) + "%" : "—";
   const cardRef = useRef(null);
 
+  // Auto-scroll this card into view when it becomes selected
   useEffect(() => {
     if (isSelected && cardRef.current) {
       cardRef.current.scrollIntoView({ behavior: "smooth", block: "nearest" });
@@ -254,11 +323,14 @@ function PropertyCard({ p, isSelected, onSelect }) {
       onMouseLeave={e => { e.currentTarget.style.boxShadow = isSelected ? "0 4px 20px rgba(0,0,0,0.15)" : "none"; e.currentTarget.style.transform = "none"; }}
       onClick={() => { onSelect(p.zpid); window.open(p.detailUrl, "_blank"); }}
     >
+      {/* Property photo or placeholder */}
       {p.imgSrc
         ? <img src={p.imgSrc} alt={p.address} style={{ width: "100%", height: 160, objectFit: "cover" }} />
         : <div style={{ width: "100%", height: 160, background: "#f3f4f6", display: "flex", alignItems: "center", justifyContent: "center", color: "#9ca3af", fontSize: 13 }}>No image</div>
       }
       <div style={{ padding: "12px 14px", flex: 1, display: "flex", flexDirection: "column", gap: 8 }}>
+
+        {/* Score badge and ratio percentage */}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <span style={{
             fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase",
@@ -267,7 +339,11 @@ function PropertyCard({ p, isSelected, onSelect }) {
           }}>{score.label}</span>
           <span style={{ fontSize: 13, fontWeight: 700, color: score.color }}>{ratioDisplay}</span>
         </div>
+
+        {/* Address */}
         <p style={{ margin: 0, fontSize: 13, fontWeight: 600, color: "#111827", lineHeight: 1.4 }}>{p.address}</p>
+
+        {/* Price, Zestimate, and Rent estimate boxes */}
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 5 }}>
           {[
             { label: "Price",     val: fmt(p.price) },
@@ -280,18 +356,26 @@ function PropertyCard({ p, isSelected, onSelect }) {
             </div>
           ))}
         </div>
+
+        {/* Property details row */}
         <div style={{ display: "flex", flexWrap: "wrap", gap: 8, fontSize: 12, color: "#6b7280" }}>
           {p.bedrooms   && <span>🛏 {p.bedrooms} bd</span>}
           {p.bathrooms  && <span>🚿 {p.bathrooms} ba</span>}
           {p.livingArea && <span>📐 {Number(p.livingArea).toLocaleString()} sqft</span>}
           {p.daysOnZillow != null && <span>📅 {p.daysOnZillow}d listed</span>}
         </div>
+
+        {/* Open house banner — only shown if listing has an upcoming open house */}
         {p.hasOpenHouse && (
           <div style={{ background: "#eff6ff", borderRadius: 6, padding: "5px 8px", fontSize: 11, color: "#1d4ed8", fontWeight: 500 }}>
             🚪 Open House: {p.openHouseStartDate}
           </div>
         )}
+
+        {/* Listing status (e.g. "House for sale", "New construction", "Foreclosure") */}
         {p.statusText && <div style={{ fontSize: 10, color: "#6b7280" }}>{p.statusText}</div>}
+
+        {/* Price change indicator — green if price dropped, red if it increased */}
         {p.priceChange && (
           <div style={{ fontSize: 11, color: p.priceChange < 0 ? "#15803d" : "#b91c1c", fontWeight: 600 }}>
             {p.priceChange < 0 ? "▼" : "▲"} Price changed {fmt(Math.abs(p.priceChange))}
@@ -302,8 +386,16 @@ function PropertyCard({ p, isSelected, onSelect }) {
   );
 }
 
-// ── Main App ────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
+// Main App Component
+// The root of the application. Manages all state and renders
+// the header, search panel, results, and map.
+// ─────────────────────────────────────────────────────────────
 export default function App() {
+
+  // ── Filter state ──────────────────────────────────────────
+  // Each piece of state corresponds to a search filter.
+  // All start empty/false (no filter applied).
   const [location, setLocation]   = useState("");
   const [beds, setBeds]           = useState("");
   const [baths, setBaths]         = useState("");
@@ -334,19 +426,27 @@ export default function App() {
   const [minSchoolRating, setMinSchoolRating] = useState("");
   const [daysOnZillow, setDaysOnZillow]   = useState("");
   const [keywords, setKeywords]           = useState("");
-  const [showFilters, setShowFilters]     = useState(false);
-  const [sortBy, setSortBy]               = useState("ratio");
-  const [onlyWithRent, setOnlyWithRent]   = useState(true);
-  const [showMap, setShowMap]             = useState(true);
-  const [selectedZpid, setSelectedZpid]   = useState(null);
-  const [loading, setLoading]         = useState(false);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [results, setResults]         = useState(null);
-  const [allListings, setAllListings] = useState([]);
-  const [currentPage, setCurrentPage] = useState(1);
-  const [error, setError]             = useState(null);
-  const lastPayloadRef                = useRef({});
 
+  // ── UI state ──────────────────────────────────────────────
+  const [showFilters, setShowFilters]     = useState(false);   // Toggle advanced filter panel
+  const [sortBy, setSortBy]               = useState("ratio"); // Current sort option
+  const [onlyWithRent, setOnlyWithRent]   = useState(true);    // Filter to listings with rent data
+  const [showMap, setShowMap]             = useState(true);    // Toggle map visibility
+  const [selectedZpid, setSelectedZpid]   = useState(null);   // Currently selected listing
+
+  // ── Fetch state ───────────────────────────────────────────
+  const [loading, setLoading]         = useState(false);  // Initial search loading
+  const [loadingMore, setLoadingMore] = useState(false);  // Load More button loading
+  const [results, setResults]         = useState(null);   // Latest API response metadata
+  const [allListings, setAllListings] = useState([]);     // All listings accumulated across pages
+  const [currentPage, setCurrentPage] = useState(1);      // Current page number
+  const [error, setError]             = useState(null);   // Error message if request fails
+  const lastPayloadRef                = useRef({});       // Stores last search payload for Load More
+
+  // ── buildPayload ──────────────────────────────────────────
+  // Assembles the search request body from all active filter
+  // states. Only includes filters that have a value set —
+  // empty/false filters are omitted so the API ignores them.
   const buildPayload = (page = 1) => {
     const p = { location, page };
     if (beds && beds !== "Any")   p.min_beds  = parseInt(beds);
@@ -381,6 +481,10 @@ export default function App() {
     return p;
   };
 
+  // ── fetchPage ─────────────────────────────────────────────
+  // Makes a POST request to the Flask backend with the given
+  // payload and returns the parsed JSON response.
+  // Throws an error if the backend returns an error message.
   const fetchPage = async (payload) => {
     const res  = await fetch(`${API_BASE}/search`, {
       method: "POST",
@@ -392,6 +496,9 @@ export default function App() {
     return data;
   };
 
+  // ── handleSearch ──────────────────────────────────────────
+  // Triggered when the user clicks Search or presses Enter.
+  // Resets all previous results and fetches page 1.
   const handleSearch = async () => {
     if (!location.trim()) return;
     setLoading(true);
@@ -413,6 +520,9 @@ export default function App() {
     }
   };
 
+  // ── handleLoadMore ────────────────────────────────────────
+  // Fetches the next page using the same filters as the original
+  // search and appends the new listings to the existing list.
   const handleLoadMore = async () => {
     const nextPage = currentPage + 1;
     setLoadingMore(true);
@@ -429,6 +539,10 @@ export default function App() {
     }
   };
 
+  // ── Filtering & Sorting ───────────────────────────────────
+  // visibleListings filters out listings without rent data if
+  // the "Only with rent estimate" checkbox is checked.
+  // sorted then applies the selected sort order on top of that.
   const visibleListings = onlyWithRent
     ? allListings.filter(p => p.rentZestimate != null)
     : allListings;
@@ -442,8 +556,10 @@ export default function App() {
     return 0;
   });
 
+  // Show Load More if the API says there are more pages
   const hasMore = results?.has_more && (results?.max_pages == null || currentPage < results.max_pages);
 
+  // Count how many filters are currently active for the badge on the Filters button
   const activeFilterCount = [
     beds && beds !== "Any", baths && baths !== "Any", homeType,
     priceMin, priceMax, sqftMin, sqftMax, minLotSize,
@@ -454,10 +570,11 @@ export default function App() {
 
   const hasResults = sorted.length > 0;
 
+  // ── Render ────────────────────────────────────────────────
   return (
     <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column", background: "#f8fafc", fontFamily: "'Georgia', serif" }}>
 
-      {/* Header */}
+      {/* ── Header ── Dark top bar with title and Hide/Show Map button */}
       <div style={{ background: "#0f172a", padding: "16px 24px", flexShrink: 0 }}>
         <div style={{ maxWidth: 1400, margin: "0 auto", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <div>
@@ -478,9 +595,11 @@ export default function App() {
         </div>
       </div>
 
-      {/* Search panel */}
+      {/* ── Search Panel ── White bar with location input, quick filters, and advanced filter drawer */}
       <div style={{ background: "#fff", borderBottom: "1px solid #e2e8f0", padding: "16px 24px", flexShrink: 0 }}>
         <div style={{ maxWidth: 1400, margin: "0 auto" }}>
+
+          {/* Main search row */}
           <div style={{ display: "flex", gap: 10, marginBottom: 12 }}>
             <input
               style={{ ...inputStyle, fontSize: 15, padding: "10px 14px", flex: 1 }}
@@ -522,6 +641,7 @@ export default function App() {
             >{loading ? "Searching…" : "Search"}</button>
           </div>
 
+          {/* Advanced filter drawer — shown/hidden by the Filters button */}
           {showFilters && (
             <div style={{ paddingTop: 12, borderTop: "1px solid #f1f5f9" }}>
               <SectionLabel>Price & Size</SectionLabel>
@@ -587,20 +707,21 @@ export default function App() {
         </div>
       </div>
 
-      {/* Error */}
+      {/* ── Error Banner ── Shown if the API request fails */}
       {error && (
         <div style={{ background: "#fef2f2", border: "1px solid #fca5a5", padding: "12px 24px", color: "#991b1b", fontSize: 14, flexShrink: 0 }}>
           ⚠️ {error}
         </div>
       )}
 
-      {/* Main content area */}
+      {/* ── Main Content ── Split layout: cards on left, map on right */}
       {hasResults ? (
         <div style={{ display: "flex", minHeight: 0, flex: 1 }}>
 
-          {/* Left — cards */}
+          {/* Left panel — scrollable list of property cards */}
           <div style={{ width: showMap ? 420 : "100%", flexShrink: 0, padding: "16px", display: "flex", flexDirection: "column", gap: 12 }}>
-            {/* Results bar */}
+
+            {/* Results bar with count, rent filter checkbox, and sort dropdown */}
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
               <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                 <p style={{ margin: 0, fontSize: 13, color: "#475569" }}>
@@ -622,14 +743,14 @@ export default function App() {
               </select>
             </div>
 
-            {/* Legend */}
+            {/* Score legend */}
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
               {Object.entries(scoreConfig).map(([k, v]) => (
                 <span key={k} style={{ fontSize: 10, padding: "2px 8px", borderRadius: 99, background: v.bg, color: v.color, border: `1px solid ${v.border}` }}>{v.label}</span>
               ))}
             </div>
 
-            {/* Cards */}
+            {/* Property cards list */}
             {sorted.map(p => (
               <PropertyCard
                 key={p.zpid || p.address}
@@ -639,7 +760,7 @@ export default function App() {
               />
             ))}
 
-            {/* Load more */}
+            {/* Load More button — fetches the next page of results */}
             <div style={{ textAlign: "center", padding: "16px 0 32px" }}>
               {hasMore ? (
                 <button
@@ -662,7 +783,7 @@ export default function App() {
             </div>
           </div>
 
-          {/* Right — map */}
+          {/* Right panel — sticky map that stays in view as you scroll cards */}
           {showMap && (
             <div style={{ flex: 1, padding: "16px 16px 16px 0", minHeight: 500, position: "sticky", top: 0, height: "100vh" }}>
               <PropertyMap
@@ -674,7 +795,7 @@ export default function App() {
           )}
         </div>
       ) : (
-        // Empty state
+        // ── Empty state ── Shown before any search is run or if no results
         <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", color: "#94a3b8", gap: 12 }}>
           {loading
             ? <p style={{ fontSize: 16 }}>Searching listings…</p>
