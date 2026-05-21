@@ -196,7 +196,8 @@ def process_listings(raw_listings):
 # ─────────────────────────────────────────────────────────────
 def bool_param(val):
     if val is None or val == "": return None
-    return val.lower() == "true"
+    if isinstance(val, bool): return val  # already a boolean, return as-is
+    return str(val).lower() == "true"    # handle string "true"/"false"
 
 
 # ─────────────────────────────────────────────────────────────
