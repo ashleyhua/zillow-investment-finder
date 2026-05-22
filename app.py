@@ -570,12 +570,6 @@ def lookup_by_address():
         if not data:
             return jsonify({"error": "Property not found"}), 404
 
-        # Log top-level keys so we can see the response structure
-        import logging
-        logging.warning(f"property/all top keys: {list(data.keys())}")
-        logging.warning(f"rentZestimate direct: {data.get('rentZestimate')}")
-        logging.warning(f"hdpData keys: {list((data.get('hdpData') or {}).keys())}")
-
         # Build address string — can be object or string
         raw_addr = data.get("address")
         if isinstance(raw_addr, dict):
@@ -610,12 +604,13 @@ def lookup_by_address():
                      (data.get("hdpData") or {}).get("homeInfo", {}).get("zestimate") or
                      (data.get("listing") or {}).get("zestimate"))
 
-        # Image
-        img_src = data.get("imgSrc") or data.get("primaryPhoto")
-        if isinstance(img_src, dict):
-            img_src = img_src.get("url") or img_src.get("src")
+        # Image — /property/all stores photos under rich_media or compsCarouselPropertyPhotos
+        img_src = data.get("imgSrc")
         if not img_src:
-            photos = data.get("photos") or data.get("images") or []
+            rich = data.get("rich_media") or {}
+            photos = (rich.get("photos") or rich.get("images") or
+                      data.get("compsCarouselPropertyPhotos") or
+                      data.get("photos") or data.get("images") or [])
             if photos:
                 first = photos[0]
                 if isinstance(first, dict):
@@ -623,6 +618,9 @@ def lookup_by_address():
                                ((first.get("mixedSources") or {}).get("jpeg") or [{}])[0].get("url"))
                 elif isinstance(first, str):
                     img_src = first
+        if not img_src:
+            # Fall back to street view image
+            img_src = data.get("streetViewImageUrl")
 
         detail_url = url_or_address  # use the original Zillow URL
 
