@@ -5,40 +5,246 @@ import sqlite3
 import json
 import time
 import os
+import hashlib
 
 app = Flask(__name__)
-CORS(app)  # Allow cross-origin requests from the React frontend
+CORS(app)
 
-# ─────────────────────────────────────────────────────────────
-# API Configuration
-# The API key is stored as an environment variable on Render
-# (not hardcoded) so it stays secret even in a public repo.
-# ─────────────────────────────────────────────────────────────
 RAPIDAPI_KEY = os.environ.get("RAPIDAPI_KEY", "")
 RAPIDAPI_HOST = "unofficial-zillow-api2.p.rapidapi.com"
 
-# These headers are sent with every request to the Zillow API
 HEADERS = {
     "X-RapidAPI-Key": RAPIDAPI_KEY,
     "X-RapidAPI-Host": RAPIDAPI_HOST
 }
 
+FAVORITES_PIN = hashlib.sha256("lovemom".encode()).hexdigest()
+
+def check_pin(pin):
+    if not pin:
+        return False
+    return hashlib.sha256(str(pin).encode()).hexdigest() == FAVORITES_PIN
+
 # ─────────────────────────────────────────────────────────────
-# Cache Configuration
-# Results are cached in a local SQLite database for 24 hours.
-# This means repeat searches don't use up API calls.
+# Property Tax Rates
+# City-level rates for top investment markets.
+# Falls back to state average if city not found.
+# All rates are effective annual rates (% of home value).
+# Sources: county assessor offices, Tax Foundation 2023-2024.
+# Key: "City, ST" lowercase
 # ─────────────────────────────────────────────────────────────
+CITY_TAX_RATES = {
+    # Florida
+    "miami, fl": 0.0097, "orlando, fl": 0.0085, "tampa, fl": 0.0093,
+    "jacksonville, fl": 0.0089, "fort lauderdale, fl": 0.0101,
+    "st. petersburg, fl": 0.0088, "hialeah, fl": 0.0097,
+    "tallahassee, fl": 0.0078, "cape coral, fl": 0.0091,
+    "fort myers, fl": 0.0094, "sarasota, fl": 0.0090,
+    "gainesville, fl": 0.0082, "boca raton, fl": 0.0098,
+    # Texas
+    "houston, tx": 0.0203, "austin, tx": 0.0181, "dallas, tx": 0.0197,
+    "san antonio, tx": 0.0189, "fort worth, tx": 0.0192,
+    "el paso, tx": 0.0165, "arlington, tx": 0.0195,
+    "corpus christi, tx": 0.0173, "plano, tx": 0.0183,
+    "lubbock, tx": 0.0168, "laredo, tx": 0.0157,
+    "irving, tx": 0.0190, "frisco, tx": 0.0185,
+    # California
+    "los angeles, ca": 0.0072, "san diego, ca": 0.0074,
+    "san jose, ca": 0.0071, "san francisco, ca": 0.0065,
+    "fresno, ca": 0.0081, "sacramento, ca": 0.0079,
+    "long beach, ca": 0.0073, "oakland, ca": 0.0076,
+    "bakersfield, ca": 0.0083, "anaheim, ca": 0.0070,
+    "santa ana, ca": 0.0072, "riverside, ca": 0.0086,
+    "irvine, ca": 0.0068,
+    # New York
+    "new york, ny": 0.0088, "buffalo, ny": 0.0281,
+    "yonkers, ny": 0.0163, "rochester, ny": 0.0295,
+    "syracuse, ny": 0.0312,
+    # Illinois
+    "chicago, il": 0.0233, "aurora, il": 0.0251,
+    "rockford, il": 0.0263, "joliet, il": 0.0248,
+    "naperville, il": 0.0218,
+    # Georgia
+    "atlanta, ga": 0.0102, "columbus, ga": 0.0088,
+    "savannah, ga": 0.0094, "athens, ga": 0.0091,
+    "augusta, ga": 0.0086,
+    # North Carolina
+    "charlotte, nc": 0.0082, "raleigh, nc": 0.0078,
+    "greensboro, nc": 0.0085, "durham, nc": 0.0094,
+    "winston-salem, nc": 0.0081,
+    # Arizona
+    "phoenix, az": 0.0060, "tucson, az": 0.0064,
+    "scottsdale, az": 0.0055, "chandler, az": 0.0058,
+    "tempe, az": 0.0061, "mesa, az": 0.0059,
+    "gilbert, az": 0.0057, "glendale, az": 0.0062,
+    # Nevada
+    "las vegas, nv": 0.0059, "henderson, nv": 0.0057,
+    "reno, nv": 0.0064, "north las vegas, nv": 0.0061,
+    # Colorado
+    "denver, co": 0.0057, "colorado springs, co": 0.0059,
+    "aurora, co": 0.0062, "fort collins, co": 0.0055,
+    "boulder, co": 0.0052,
+    # Washington
+    "seattle, wa": 0.0093, "spokane, wa": 0.0108,
+    "tacoma, wa": 0.0101, "bellevue, wa": 0.0089,
+    "kent, wa": 0.0097,
+    # Ohio
+    "columbus, oh": 0.0148, "cleveland, oh": 0.0193,
+    "cincinnati, oh": 0.0162, "toledo, oh": 0.0188,
+    "akron, oh": 0.0177,
+    # Michigan
+    "detroit, mi": 0.0220, "grand rapids, mi": 0.0168,
+    "warren, mi": 0.0175, "sterling heights, mi": 0.0159,
+    "ann arbor, mi": 0.0148,
+    # Pennsylvania
+    "philadelphia, pa": 0.0131, "pittsburgh, pa": 0.0143,
+    "allentown, pa": 0.0165, "erie, pa": 0.0181,
+    # Tennessee
+    "nashville, tn": 0.0064, "memphis, tn": 0.0088,
+    "knoxville, tn": 0.0058, "chattanooga, tn": 0.0072,
+    "clarksville, tn": 0.0061,
+    # Indiana
+    "indianapolis, in": 0.0092, "fort wayne, in": 0.0085,
+    "evansville, in": 0.0079, "south bend, in": 0.0094,
+    # Missouri
+    "kansas city, mo": 0.0101, "st. louis, mo": 0.0127,
+    "springfield, mo": 0.0089, "columbia, mo": 0.0083,
+    # Minnesota
+    "minneapolis, mn": 0.0108, "st. paul, mn": 0.0113,
+    "rochester, mn": 0.0097, "duluth, mn": 0.0121,
+    # Wisconsin
+    "milwaukee, wi": 0.0222, "madison, wi": 0.0192,
+    "green bay, wi": 0.0185, "kenosha, wi": 0.0207,
+    # Oregon
+    "portland, or": 0.0099, "eugene, or": 0.0092,
+    "salem, or": 0.0088, "gresham, or": 0.0096,
+    # Maryland
+    "baltimore, md": 0.0147, "frederick, md": 0.0102,
+    "gaithersburg, md": 0.0091, "rockville, md": 0.0088,
+    # Virginia
+    "virginia beach, va": 0.0089, "norfolk, va": 0.0093,
+    "chesapeake, va": 0.0087, "richmond, va": 0.0097,
+    "arlington, va": 0.0083,
+    # Massachusetts
+    "boston, ma": 0.0098, "worcester, ma": 0.0123,
+    "springfield, ma": 0.0161, "lowell, ma": 0.0118,
+    "cambridge, ma": 0.0095,
+    # South Carolina
+    "columbia, sc": 0.0059, "charleston, sc": 0.0054,
+    "north charleston, sc": 0.0058, "greenville, sc": 0.0056,
+    # Alabama
+    "birmingham, al": 0.0049, "montgomery, al": 0.0044,
+    "huntsville, al": 0.0042, "mobile, al": 0.0040,
+    # Louisiana
+    "new orleans, la": 0.0063, "baton rouge, la": 0.0055,
+    "shreveport, la": 0.0061, "lafayette, la": 0.0050,
+    # Kentucky
+    "louisville, ky": 0.0089, "lexington, ky": 0.0081,
+    "bowling green, ky": 0.0076,
+    # Oklahoma
+    "oklahoma city, ok": 0.0095, "tulsa, ok": 0.0092,
+    "norman, ok": 0.0088, "broken arrow, ok": 0.0086,
+    # Utah
+    "salt lake city, ut": 0.0059, "west valley city, ut": 0.0062,
+    "provo, ut": 0.0055, "st. george, ut": 0.0050,
+    # New Mexico
+    "albuquerque, nm": 0.0082, "las cruces, nm": 0.0074,
+    "rio rancho, nm": 0.0079,
+    # Kansas
+    "wichita, ks": 0.0139, "overland park, ks": 0.0132,
+    "kansas city, ks": 0.0148, "olathe, ks": 0.0128,
+    # Nebraska
+    "omaha, ne": 0.0163, "lincoln, ne": 0.0158,
+    # Iowa
+    "des moines, ia": 0.0161, "cedar rapids, ia": 0.0153,
+    "davenport, ia": 0.0171,
+    # Arkansas
+    "little rock, ar": 0.0066, "fort smith, ar": 0.0060,
+    "fayetteville, ar": 0.0058,
+    # Mississippi
+    "jackson, ms": 0.0071, "gulfport, ms": 0.0063,
+    "hattiesburg, ms": 0.0059,
+    # Idaho
+    "boise, id": 0.0063, "nampa, id": 0.0071,
+    "meridian, id": 0.0065,
+    # Hawaii
+    "honolulu, hi": 0.0028, "pearl city, hi": 0.0027,
+    "hilo, hi": 0.0031,
+    # Connecticut
+    "bridgeport, ct": 0.0193, "new haven, ct": 0.0198,
+    "hartford, ct": 0.0228, "stamford, ct": 0.0168,
+    # New Jersey
+    "newark, nj": 0.0281, "jersey city, nj": 0.0237,
+    "paterson, nj": 0.0312, "elizabeth, nj": 0.0294,
+    "trenton, nj": 0.0341,
+    # New Hampshire
+    "manchester, nh": 0.0208, "nashua, nh": 0.0197,
+    "concord, nh": 0.0191,
+    # Rhode Island
+    "providence, ri": 0.0177, "warwick, ri": 0.0161,
+    "cranston, ri": 0.0158,
+    # Delaware
+    "wilmington, de": 0.0061, "dover, de": 0.0055,
+    # West Virginia
+    "charleston, wv": 0.0058, "huntington, wv": 0.0062,
+    # Montana
+    "billings, mt": 0.0089, "missoula, mt": 0.0082,
+    # Wyoming
+    "cheyenne, wy": 0.0063, "casper, wy": 0.0058,
+    # North Dakota
+    "fargo, nd": 0.0103, "bismarck, nd": 0.0094,
+    # South Dakota
+    "sioux falls, sd": 0.0119, "rapid city, sd": 0.0110,
+    # Alaska
+    "anchorage, ak": 0.0121, "fairbanks, ak": 0.0112,
+    # Washington DC
+    "washington, dc": 0.0085,
+}
+
+STATE_TAX_RATES = {
+    "AL": 0.0041, "AK": 0.0119, "AZ": 0.0063, "AR": 0.0062,
+    "CA": 0.0075, "CO": 0.0060, "CT": 0.0198, "DE": 0.0057,
+    "FL": 0.0089, "GA": 0.0092, "HI": 0.0028, "ID": 0.0069,
+    "IL": 0.0227, "IN": 0.0085, "IA": 0.0153, "KS": 0.0138,
+    "KY": 0.0086, "LA": 0.0055, "ME": 0.0136, "MD": 0.0099,
+    "MA": 0.0114, "MI": 0.0154, "MN": 0.0108, "MS": 0.0065,
+    "MO": 0.0093, "MT": 0.0084, "NE": 0.0157, "NV": 0.0060,
+    "NH": 0.0204, "NJ": 0.0247, "NM": 0.0080, "NY": 0.0172,
+    "NC": 0.0080, "ND": 0.0098, "OH": 0.0153, "OK": 0.0090,
+    "OR": 0.0093, "PA": 0.0153, "RI": 0.0153, "SC": 0.0057,
+    "SD": 0.0117, "TN": 0.0068, "TX": 0.0160, "UT": 0.0058,
+    "VT": 0.0183, "VA": 0.0082, "WA": 0.0098, "WV": 0.0059,
+    "WI": 0.0185, "WY": 0.0061, "DC": 0.0085,
+}
+
+def get_tax_estimate(price, city, state):
+    """Returns annual tax, monthly tax, rate used, and whether it was city-level."""
+    if not price:
+        return None, None, None, False
+    city_key = f"{(city or '').lower().strip()}, {(state or '').lower().strip()}"
+    city_rate = CITY_TAX_RATES.get(city_key)
+    if city_rate:
+        rate = city_rate
+        is_city_level = True
+    else:
+        rate = STATE_TAX_RATES.get((state or "").upper())
+        is_city_level = False
+    if not rate:
+        return None, None, None, False
+    annual  = round(price * rate)
+    monthly = round(annual / 12)
+    return annual, monthly, rate, is_city_level
+
 CACHE_DB = "cache.db"
-CACHE_TTL = 60 * 60 * 24  # 24 hours in seconds
+CACHE_TTL = 60 * 60 * 24
 
-
-# ─────────────────────────────────────────────────────────────
-# Database Setup
-# Creates the cache table if it doesn't already exist.
-# Runs once automatically when the server starts.
-# ─────────────────────────────────────────────────────────────
-def init_db():
+def get_db():
     conn = sqlite3.connect(CACHE_DB)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def init_db():
+    conn = get_db()
     conn.execute("""
         CREATE TABLE IF NOT EXISTS cache (
             key TEXT PRIMARY KEY,
@@ -46,41 +252,35 @@ def init_db():
             created_at INTEGER NOT NULL
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS favorites (
+            zpid TEXT PRIMARY KEY,
+            data TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'saved',
+            note TEXT,
+            added_at INTEGER NOT NULL
+        )
+    """)
     conn.commit()
     conn.close()
 
 init_db()
 
-
-# ─────────────────────────────────────────────────────────────
-# Cache Read
-# Looks up a search in the database by its cache key.
-# Returns the saved result if it's less than 24 hours old,
-# deletes it and returns None if it's expired.
-# ─────────────────────────────────────────────────────────────
 def cache_get(key):
-    conn = sqlite3.connect(CACHE_DB)
+    conn = get_db()
     row = conn.execute("SELECT data, created_at FROM cache WHERE key=?", (key,)).fetchone()
     conn.close()
     if row:
-        data, created_at = row
-        if time.time() - created_at < CACHE_TTL:
-            return json.loads(data)
-        # Expired — delete it so it gets refreshed next time
-        conn = sqlite3.connect(CACHE_DB)
+        if time.time() - row["created_at"] < CACHE_TTL:
+            return json.loads(row["data"])
+        conn = get_db()
         conn.execute("DELETE FROM cache WHERE key=?", (key,))
         conn.commit()
         conn.close()
     return None
 
-
-# ─────────────────────────────────────────────────────────────
-# Cache Write
-# Saves a search result to the database with the current
-# timestamp so we know when it expires.
-# ─────────────────────────────────────────────────────────────
 def cache_set(key, data):
-    conn = sqlite3.connect(CACHE_DB)
+    conn = get_db()
     conn.execute(
         "INSERT OR REPLACE INTO cache (key, data, created_at) VALUES (?, ?, ?)",
         (key, json.dumps(data), int(time.time()))
@@ -88,29 +288,11 @@ def cache_set(key, data):
     conn.commit()
     conn.close()
 
-
-# ─────────────────────────────────────────────────────────────
-# Ratio Calculator
-# Divides the monthly rent estimate by the purchase price
-# and returns a percentage. For example, $2,000 rent on a
-# $200,000 home = 1.0%. Returns None if either value is missing.
-# ─────────────────────────────────────────────────────────────
 def calculate_ratio(price, rent):
     if price and rent and price > 0:
         return round((rent / price) * 100, 4)
     return None
 
-
-# ─────────────────────────────────────────────────────────────
-# Score Labeler
-# Converts a ratio number into a score label used for
-# color-coding cards in the frontend:
-#   Excellent = 1%+ (great investment)
-#   Good      = 0.8–1%
-#   Fair      = 0.6–0.8%
-#   Poor      = under 0.6%
-#   Unknown   = no rent data available
-# ─────────────────────────────────────────────────────────────
 def score_label(ratio):
     if ratio is None:   return "unknown"
     if ratio >= 1.0:    return "excellent"
@@ -118,39 +300,24 @@ def score_label(ratio):
     if ratio >= 0.6:    return "fair"
     return "poor"
 
-
-# ─────────────────────────────────────────────────────────────
-# Listing Processor
-# Takes the raw list of listings from the Zillow API and
-# cleans them up — skips auctions, fixes URLs, calculates
-# the ratio and score, and returns only the fields the
-# frontend actually needs.
-# ─────────────────────────────────────────────────────────────
 def process_listings(raw_listings):
     processed = []
     for home in raw_listings:
         price  = home.get("price")
         rent   = home.get("rentZestimate")
-
-        # Skip auctions — they show up with a price of $5
         if price and price < 1000:
             continue
-
         ratio  = calculate_ratio(price, rent)
         street = home.get("streetAddress", "")
         city   = home.get("city", "")
         state  = home.get("state", "")
         zipcode= home.get("zipcode", "")
         address= home.get("address") or f"{street}, {city}, {state} {zipcode}".strip(", ")
-
-        # This API already returns full URLs, but add the domain
-        # as a fallback in case a relative URL slips through
         detail_url = home.get("detailUrl", "")
         if detail_url and not detail_url.startswith("http"):
             detail_url = f"https://www.zillow.com{detail_url}"
-
         status_text = home.get("statusText", "")
-
+        annual_tax, monthly_tax, tax_rate, is_city_tax = get_tax_estimate(price, city, state)
         processed.append({
             "zpid":             home.get("zpid"),
             "address":          address,
@@ -163,6 +330,10 @@ def process_listings(raw_listings):
             "rentZestimate":    rent,
             "ratio":            ratio,
             "score":            score_label(ratio),
+            "annualTax":        annual_tax,
+            "monthlyTax":       monthly_tax,
+            "taxRate":          tax_rate,
+            "isCityTax":        is_city_tax,
             "bedrooms":         home.get("bedrooms"),
             "bathrooms":        home.get("bathrooms"),
             "livingArea":       home.get("livingArea"),
@@ -186,43 +357,19 @@ def process_listings(raw_listings):
         })
     return processed
 
-
-# ─────────────────────────────────────────────────────────────
-# Bool Helper
-# The API accepts true/false booleans. This converts any
-# string "true"/"false" values from the request into actual
-# Python booleans before sending them to the Zillow API.
-# ─────────────────────────────────────────────────────────────
 def bool_param(val):
     if val is None or val == "": return None
-    if isinstance(val, bool): return val  # already a boolean, return as-is
-    return str(val).lower() == "true"    # handle string "true"/"false"
+    if isinstance(val, bool): return val
+    return str(val).lower() == "true"
 
-
-# ─────────────────────────────────────────────────────────────
-# Main Search Endpoint
-# The frontend sends a POST request here with the location
-# and any active filters. This endpoint:
-#   1. Checks the cache — if found, returns instantly
-#   2. Builds the request payload with all active filters
-#   3. Calls the Zillow API
-#   4. Processes and scores the listings
-#   5. Saves the result to cache
-#   6. Returns the results to the frontend as JSON
-# ─────────────────────────────────────────────────────────────
 @app.route("/search", methods=["POST"])
 def search():
     body = request.get_json(force=True, silent=True) or {}
     location = (body.get("location") or "").strip()
     if not location:
         return jsonify({"error": "Location is required"}), 400
-
     page = int(body.get("page", 1))
-
-    # Always search for homes for sale (not rentals or sold)
     payload = {"location": location, "page": page, "status": "for_sale"}
-
-    # Add any numeric filters the user set (price, beds, sqft, etc.)
     int_fields = [
         "min_price", "max_price", "min_beds", "min_baths",
         "min_sqft", "max_sqft", "min_lot_size",
@@ -234,52 +381,37 @@ def search():
         if v not in (None, "", 0):
             try: payload[f] = int(v)
             except: pass
-
-    # Add any boolean filters (pool, garage, waterfront, etc.)
-    # Only sent to the API if the user turned them on
     bool_fields = [
         "has_pool", "has_garage", "has_basement", "has_ac",
-        "is_waterfront", "single_story",
-        "is_new_construction", "is_coming_soon", "is_foreclosure",
-        "is_fsbo", "is_55_plus", "has_open_house", "has_3d_tour",
-        "only_price_reduction",
+        "is_waterfront", "single_story", "is_new_construction",
+        "is_coming_soon", "is_foreclosure", "is_fsbo", "is_55_plus",
+        "has_open_house", "has_3d_tour", "only_price_reduction",
     ]
     for f in bool_fields:
         v = bool_param(body.get(f))
         if v is True:
             payload[f] = True
-
-    # Add string filters (days on market, keywords, property type)
     str_fields = ["days_on_zillow", "keywords", "home_type"]
     for f in str_fields:
         v = body.get(f)
         if v: payload[f] = v
-
-    # Use the full payload as the cache key so different
-    # filter combinations are cached separately
     cache_key = json.dumps(payload, sort_keys=True)
     cached = cache_get(cache_key)
     if cached:
         cached["from_cache"] = True
         return jsonify(cached)
-
-    # Call the Zillow API
     try:
         response = requests.post(
             f"https://{RAPIDAPI_HOST}/search/address",
             headers={**HEADERS, "Content-Type": "application/json"},
-            json=payload,
-            timeout=20
+            json=payload, timeout=20
         )
         response.raise_for_status()
         data = response.json()
     except requests.exceptions.RequestException as e:
         return jsonify({"error": f"Failed to fetch data: {str(e)}"}), 502
-
-    # Process and score the listings, then cache and return
     raw_listings = data.get("listings", data.get("results", []))
     processed = process_listings(raw_listings)
-
     result = {
         "results":    processed,
         "total":      data.get("total_results", len(processed)),
@@ -289,20 +421,88 @@ def search():
         "location":   location,
         "from_cache": False,
     }
-
     cache_set(cache_key, result)
     return jsonify(result)
 
+@app.route("/favorites", methods=["GET"])
+def get_favorites():
+    conn = get_db()
+    rows = conn.execute("SELECT * FROM favorites ORDER BY added_at DESC").fetchall()
+    conn.close()
+    return jsonify([dict(r) | {"data": json.loads(r["data"])} for r in rows])
 
-# ─────────────────────────────────────────────────────────────
-# Cache Utility Endpoints
-# /cache/clear — wipes all cached searches
-# /cache/stats — returns how many searches are cached and
-#                the size of the database file
-# ─────────────────────────────────────────────────────────────
+@app.route("/favorites", methods=["POST"])
+def add_favorite():
+    body = request.get_json(force=True, silent=True) or {}
+    if not check_pin(body.get("pin")):
+        return jsonify({"error": "Invalid PIN"}), 403
+    prop = body.get("property")
+    if not prop or not prop.get("zpid"):
+        return jsonify({"error": "Property data required"}), 400
+    conn = get_db()
+    conn.execute(
+        "INSERT OR REPLACE INTO favorites (zpid, data, status, note, added_at) VALUES (?, ?, 'saved', ?, ?)",
+        (str(prop["zpid"]), json.dumps(prop), body.get("note", ""), int(time.time()))
+    )
+    conn.commit()
+    conn.close()
+    return jsonify({"message": "Added to favorites"})
+
+@app.route("/favorites/<zpid>", methods=["PATCH"])
+def update_favorite(zpid):
+    body = request.get_json(force=True, silent=True) or {}
+    if not check_pin(body.get("pin")):
+        return jsonify({"error": "Invalid PIN"}), 403
+    status = body.get("status")
+    note   = body.get("note")
+    conn = get_db()
+    if status:
+        conn.execute("UPDATE favorites SET status=? WHERE zpid=?", (status, zpid))
+    if note is not None:
+        conn.execute("UPDATE favorites SET note=? WHERE zpid=?", (note, zpid))
+    conn.commit()
+    conn.close()
+    return jsonify({"message": "Updated"})
+
+@app.route("/favorites/<zpid>", methods=["DELETE"])
+def remove_favorite(zpid):
+    body = request.get_json(force=True, silent=True) or {}
+    if not check_pin(body.get("pin")):
+        return jsonify({"error": "Invalid PIN"}), 403
+    conn = get_db()
+    conn.execute("DELETE FROM favorites WHERE zpid=?", (zpid,))
+    conn.commit()
+    conn.close()
+    return jsonify({"message": "Removed"})
+
+@app.route("/favorites/lookup", methods=["POST"])
+def lookup_by_address():
+    body = request.get_json(force=True, silent=True) or {}
+    address = (body.get("address") or "").strip()
+    if not address:
+        return jsonify({"error": "Address required"}), 400
+    try:
+        response = requests.post(
+            f"https://{RAPIDAPI_HOST}/search/address",
+            headers={**HEADERS, "Content-Type": "application/json"},
+            json={"location": address, "page": 1, "status": "for_sale"},
+            timeout=20
+        )
+        response.raise_for_status()
+        data = response.json()
+    except requests.exceptions.RequestException as e:
+        return jsonify({"error": str(e)}), 502
+    raw = data.get("listings", [])
+    if not raw:
+        return jsonify({"error": "No listings found for that address"}), 404
+    processed = process_listings(raw[:1])
+    if not processed:
+        return jsonify({"error": "Could not process listing"}), 404
+    return jsonify(processed[0])
+
 @app.route("/cache/clear", methods=["POST"])
 def clear_cache():
-    conn = sqlite3.connect(CACHE_DB)
+    conn = get_db()
     conn.execute("DELETE FROM cache")
     conn.commit()
     conn.close()
@@ -310,17 +510,11 @@ def clear_cache():
 
 @app.route("/cache/stats", methods=["GET"])
 def cache_stats():
-    conn = sqlite3.connect(CACHE_DB)
+    conn = get_db()
     total = conn.execute("SELECT COUNT(*) FROM cache").fetchone()[0]
     size  = os.path.getsize(CACHE_DB) if os.path.exists(CACHE_DB) else 0
     conn.close()
     return jsonify({"cached_queries": total, "db_size_kb": round(size / 1024, 1)})
 
-
-# ─────────────────────────────────────────────────────────────
-# Local Development Server
-# This only runs when you execute `python app.py` directly.
-# On Render, Gunicorn starts the app instead using the Procfile.
-# ─────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     app.run(debug=True, port=5001)
