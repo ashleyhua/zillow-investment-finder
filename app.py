@@ -492,21 +492,59 @@ def lookup_by_address():
             zpid = match.group(1)
 
     if zpid:
-        # Use property details endpoint for direct zpid lookup
+        # Fetch property details and financial valuation in parallel
         try:
-            response = requests.get(
+            details_resp = requests.get(
                 f"https://{RAPIDAPI_HOST}/property/details",
                 headers=HEADERS,
                 params={"zpid": zpid},
                 timeout=20
             )
-            response.raise_for_status()
-            data = response.json()
+            details_resp.raise_for_status()
+            data = details_resp.json()
         except requests.exceptions.RequestException as e:
             return jsonify({"error": str(e)}), 502
 
         if not data:
             return jsonify({"error": "Property not found"}), 404
+
+        # Second call to get zestimate + rentZestimate + images
+        try:
+            val_resp = requests.get(
+                f"https://{RAPIDAPI_HOST}/financial/valuation",
+                headers=HEADERS,
+                params={"zpid": zpid},
+                timeout=20
+            )
+            val_resp.raise_for_status()
+            val_data = val_resp.json()
+        except:
+            val_data = {}
+
+        # Also fetch images
+        try:
+            img_resp = requests.get(
+                f"https://{RAPIDAPI_HOST}/property/images",
+                headers=HEADERS,
+                params={"zpid": zpid},
+                timeout=20
+            )
+            img_resp.raise_for_status()
+            img_data = img_resp.json()
+        except:
+            img_data = {}
+
+        # Merge valuation data into main data
+        if val_data.get("zestimate"):
+            data["zestimate"] = val_data.get("zestimate")
+        if val_data.get("rentZestimate"):
+            data["rentZestimate"] = val_data.get("rentZestimate")
+
+        # Get first image
+        images = img_data.get("images") or img_data.get("photos") or []
+        if images and not data.get("imgSrc"):
+            first = images[0]
+            data["imgSrc"] = first.get("url") or first.get("src") or (first if isinstance(first, str) else None)
 
         # Normalize property details response into our standard format
         price  = data.get("price") or data.get("unformattedPrice")
