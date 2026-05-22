@@ -244,9 +244,8 @@ DATABASE_URL = os.environ.get("DATABASE_URL")
 # ─────────────────────────────────────────────────────────────
 def get_db():
     if DATABASE_URL:
-        import psycopg2
-        import psycopg2.extras
-        conn = psycopg2.connect(DATABASE_URL)
+        import psycopg
+        conn = psycopg.connect(DATABASE_URL)
         return conn
     else:
         conn = sqlite3.connect("cache.db")
