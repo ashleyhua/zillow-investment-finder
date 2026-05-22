@@ -413,8 +413,27 @@ function FavoritesTab({ onFavoriteAction, favoriteZpids }) {
 
   const isEmpty = favorites.saved.length === 0 && favorites.bought.length === 0;
 
+  // Group listings by state, sorted by ratio within each state
+  const groupByState = (listings) => {
+    const groups = {};
+    listings.forEach(p => {
+      const state = p.state || "Unknown";
+      if (!groups[state]) groups[state] = [];
+      groups[state].push(p);
+    });
+    // Sort within each state by ratio descending
+    Object.keys(groups).forEach(state => {
+      groups[state].sort((a, b) => (b.ratio ?? -1) - (a.ratio ?? -1));
+    });
+    // Sort states alphabetically
+    return Object.entries(groups).sort((a, b) => a[0].localeCompare(b[0]));
+  };
+
+  const savedByState  = groupByState(favorites.saved);
+  const boughtByState = groupByState(favorites.bought);
+
   return (
-    <div style={{ maxWidth: 900, margin: "0 auto", padding: "24px 20px" }}>
+    <div style={{ maxWidth: 1000, margin: "0 auto", padding: "24px 20px" }}>
 
       {/* Add by address */}
       <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 12, padding: 20, marginBottom: 24 }}>
@@ -440,36 +459,60 @@ function FavoritesTab({ onFavoriteAction, favoriteZpids }) {
         <div style={{ textAlign: "center", padding: "60px 0", color: "#94a3b8" }}>
           <p style={{ fontSize: 18, margin: "0 0 8px" }}>⭐</p>
           <p style={{ fontSize: 15, margin: 0 }}>No favorites yet</p>
-          <p style={{ fontSize: 13, margin: "4px 0 0" }}>Star a listing from the search results or add one by address above</p>
+          <p style={{ fontSize: 13, margin: "4px 0 0" }}>Star a listing from search results or add one by address above</p>
         </div>
       ) : (
         <>
+          {/* ── Saved section ── */}
           {favorites.saved.length > 0 && (
-            <>
-              <h2 style={{ fontSize: 16, fontWeight: 700, color: "#111827", margin: "0 0 14px", display: "flex", alignItems: "center", gap: 8 }}>
-                ⭐ Saved <span style={{ fontSize: 12, fontWeight: 400, color: "#6b7280" }}>({favorites.saved.length})</span>
+            <div style={{ marginBottom: 40 }}>
+              <h2 style={{ fontSize: 17, fontWeight: 700, color: "#111827", margin: "0 0 20px", display: "flex", alignItems: "center", gap: 8 }}>
+                ⭐ Saved
+                <span style={{ fontSize: 12, fontWeight: 400, color: "#6b7280" }}>({favorites.saved.length} properties)</span>
               </h2>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(270px, 1fr))", gap: 16, marginBottom: 32 }}>
-                {favorites.saved.map(p => (
-                  <PropertyCard key={p.zpid} p={p} favoriteZpids={favoriteZpids}
-                    onFavoriteAction={handleAction} showFavoriteControls favoriteStatus="saved" onSelect={() => {}} />
-                ))}
-              </div>
-            </>
+              {savedByState.map(([state, props]) => (
+                <div key={state} style={{ marginBottom: 28 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+                    <span style={{ fontSize: 13, fontWeight: 700, color: "#0f172a", background: "#f1f5f9", border: "1px solid #e2e8f0", borderRadius: 6, padding: "3px 10px" }}>
+                      📍 {state}
+                    </span>
+                    <span style={{ fontSize: 12, color: "#9ca3af" }}>{props.length} {props.length === 1 ? "property" : "properties"} · sorted by ratio</span>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(270px, 1fr))", gap: 14 }}>
+                    {props.map(p => (
+                      <PropertyCard key={p.zpid} p={p} favoriteZpids={favoriteZpids}
+                        onFavoriteAction={handleAction} showFavoriteControls favoriteStatus="saved" onSelect={() => {}} />
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
           )}
 
+          {/* ── Purchased section ── */}
           {favorites.bought.length > 0 && (
-            <>
-              <h2 style={{ fontSize: 16, fontWeight: 700, color: "#111827", margin: "0 0 14px", display: "flex", alignItems: "center", gap: 8 }}>
-                🏠 Purchased <span style={{ fontSize: 12, fontWeight: 400, color: "#6b7280" }}>({favorites.bought.length})</span>
+            <div>
+              <h2 style={{ fontSize: 17, fontWeight: 700, color: "#111827", margin: "0 0 20px", display: "flex", alignItems: "center", gap: 8 }}>
+                🏠 Purchased
+                <span style={{ fontSize: 12, fontWeight: 400, color: "#6b7280" }}>({favorites.bought.length} properties)</span>
               </h2>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(270px, 1fr))", gap: 16 }}>
-                {favorites.bought.map(p => (
-                  <PropertyCard key={p.zpid} p={p} favoriteZpids={favoriteZpids}
-                    onFavoriteAction={handleAction} showFavoriteControls favoriteStatus="bought" onSelect={() => {}} />
-                ))}
-              </div>
-            </>
+              {boughtByState.map(([state, props]) => (
+                <div key={state} style={{ marginBottom: 28 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+                    <span style={{ fontSize: 13, fontWeight: 700, color: "#0f172a", background: "#f1f5f9", border: "1px solid #e2e8f0", borderRadius: 6, padding: "3px 10px" }}>
+                      📍 {state}
+                    </span>
+                    <span style={{ fontSize: 12, color: "#9ca3af" }}>{props.length} {props.length === 1 ? "property" : "properties"} · sorted by ratio</span>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(270px, 1fr))", gap: 14 }}>
+                    {props.map(p => (
+                      <PropertyCard key={p.zpid} p={p} favoriteZpids={favoriteZpids}
+                        onFavoriteAction={handleAction} showFavoriteControls favoriteStatus="bought" onSelect={() => {}} />
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
           )}
         </>
       )}
