@@ -142,10 +142,12 @@ function PropertyMap({ listings, selectedZpid, onSelectPin }) {
   }, []);
 
   useEffect(() => {
-    if (mapInstanceRef.current || !mapRef.current) return;
+    if (mapInstanceRef.current) return;
+    if (!mapRef.current) return;
+
     const initMap = () => {
       const L = window.L;
-      if (!L || !mapRef.current) return;
+      if (!L || !mapRef.current || mapInstanceRef.current) return;
       if (mapRef.current._leaflet_id) mapRef.current._leaflet_id = null;
       try {
         const map = L.map(mapRef.current, { zoomControl: true });
@@ -155,13 +157,23 @@ function PropertyMap({ listings, selectedZpid, onSelectPin }) {
         mapInstanceRef.current = map;
       } catch(e) { console.warn("Map init error:", e); }
     };
-    if (window.L) { initMap(); } else {
+
+    if (window.L) {
+      initMap();
+    } else if (!document.getElementById("leaflet-js")) {
       const script = document.createElement("script");
+      script.id = "leaflet-js";
       script.src = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js";
       script.onload = initMap;
       document.head.appendChild(script);
+    } else {
+      // Script is loading — poll until Leaflet is ready
+      const interval = setInterval(() => {
+        if (window.L) { clearInterval(interval); initMap(); }
+      }, 100);
+      setTimeout(() => clearInterval(interval), 10000);
     }
-  }, []);
+  }, [listings]); // re-run when listings arrive in case Leaflet wasn't ready on mount
 
   useEffect(() => {
     const L = window.L;
