@@ -14,7 +14,6 @@ CORS(app)  # Allow cross-origin requests from the React frontend
 # The API key is stored as an environment variable on Render
 # (not hardcoded) so it stays secret even in a public repo.
 # ─────────────────────────────────────────────────────────────
-import os
 RAPIDAPI_KEY = os.environ.get("RAPIDAPI_KEY", "")
 RAPIDAPI_HOST = "unofficial-zillow-api2.p.rapidapi.com"
 
@@ -115,8 +114,8 @@ def calculate_ratio(price, rent):
 def score_label(ratio):
     if ratio is None:   return "unknown"
     if ratio >= 1.0:    return "excellent"
-    if ratio >= 0.7:    return "good"
-    if ratio >= 0.5:    return "fair"
+    if ratio >= 0.8:    return "good"
+    if ratio >= 0.6:    return "fair"
     return "poor"
 
 
