@@ -449,11 +449,11 @@ function FavoritesTab({ onFavoriteAction, favoriteZpids }) {
 
       {/* Add by address */}
       <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 12, padding: 20, marginBottom: 24 }}>
-        <h3 style={{ margin: "0 0 12px", fontSize: 15, color: "#111827" }}>➕ Add property by Zillow URL or address</h3>
+        <h3 style={{ margin: "0 0 12px", fontSize: 15, color: "#111827" }}>➕ Add property by Zillow URL</h3>
         <div style={{ display: "flex", gap: 10 }}>
           <input
             style={{ ...inputStyle, flex: 1 }}
-            placeholder="Zillow URL (recommended) or address — e.g. https://www.zillow.com/homedetails/..."
+            placeholder="Paste Zillow URL — e.g. https://www.zillow.com/homedetails/address/12345_zpid/"
             value={addressInput}
             onChange={e => setAddressInput(e.target.value)}
             onKeyDown={e => e.key === "Enter" && handleLookup()}
