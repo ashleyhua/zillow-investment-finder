@@ -511,8 +511,24 @@ def lookup_by_address():
         # Normalize property details response into our standard format
         price  = data.get("price") or data.get("unformattedPrice")
         rent   = data.get("rentZestimate")
-        state  = data.get("state", "")
-        city   = data.get("city", "")
+
+        # address can come back as a nested object or a plain string
+        raw_addr = data.get("address")
+        if isinstance(raw_addr, dict):
+            street   = raw_addr.get("streetAddress", "")
+            city     = raw_addr.get("city", "")
+            state    = raw_addr.get("state", "")
+            zipcode  = raw_addr.get("zipcode", "")
+            address  = f"{street}, {city}, {state} {zipcode}".strip(", ")
+        else:
+            address  = raw_addr or ""
+            street   = data.get("streetAddress", "")
+            city     = data.get("city", "")
+            state    = data.get("state", "")
+            zipcode  = data.get("zipcode", "")
+            if not address:
+                address = f"{street}, {city}, {state} {zipcode}".strip(", ")
+
         annual_tax, monthly_tax, tax_rate, is_city_tax = get_tax_estimate(price, city, state)
         ratio  = calculate_ratio(price, rent)
 
@@ -522,10 +538,11 @@ def lookup_by_address():
 
         return jsonify({
             "zpid":             zpid,
-            "address":          data.get("address") or f"{data.get('streetAddress','')}, {city}, {state}".strip(", "),
-            "streetAddress":    data.get("streetAddress", ""),
+            "address":          address,
+            "streetAddress":    street,
             "city":             city,
             "state":            state,
+            "zipcode":          zipcode,
             "zipcode":          data.get("zipcode", ""),
             "price":            price,
             "zestimate":        data.get("zestimate"),
