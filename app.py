@@ -478,14 +478,92 @@ def remove_favorite(zpid):
 @app.route("/favorites/lookup", methods=["POST"])
 def lookup_by_address():
     body = request.get_json(force=True, silent=True) or {}
-    address = (body.get("address") or "").strip()
-    if not address:
-        return jsonify({"error": "Address required"}), 400
+    url_or_address = (body.get("address") or "").strip()
+    if not url_or_address:
+        return jsonify({"error": "URL or address required"}), 400
+
+    # Extract zpid from Zillow URL if provided
+    # e.g. https://www.zillow.com/homedetails/address/12345678_zpid/
+    zpid = None
+    if "zillow.com" in url_or_address:
+        import re
+        match = re.search(r"/(\d+)_zpid", url_or_address)
+        if match:
+            zpid = match.group(1)
+
+    if zpid:
+        # Use property details endpoint for direct zpid lookup
+        try:
+            response = requests.get(
+                f"https://{RAPIDAPI_HOST}/property/details",
+                headers=HEADERS,
+                params={"zpid": zpid},
+                timeout=20
+            )
+            response.raise_for_status()
+            data = response.json()
+        except requests.exceptions.RequestException as e:
+            return jsonify({"error": str(e)}), 502
+
+        if not data:
+            return jsonify({"error": "Property not found"}), 404
+
+        # Normalize property details response into our standard format
+        price  = data.get("price") or data.get("unformattedPrice")
+        rent   = data.get("rentZestimate")
+        state  = data.get("state", "")
+        city   = data.get("city", "")
+        annual_tax, monthly_tax, tax_rate, is_city_tax = get_tax_estimate(price, city, state)
+        ratio  = calculate_ratio(price, rent)
+
+        detail_url = data.get("hdpUrl") or data.get("detailUrl") or url_or_address
+        if detail_url and not detail_url.startswith("http"):
+            detail_url = f"https://www.zillow.com{detail_url}"
+
+        return jsonify({
+            "zpid":             zpid,
+            "address":          data.get("address") or f"{data.get('streetAddress','')}, {city}, {state}".strip(", "),
+            "streetAddress":    data.get("streetAddress", ""),
+            "city":             city,
+            "state":            state,
+            "zipcode":          data.get("zipcode", ""),
+            "price":            price,
+            "zestimate":        data.get("zestimate"),
+            "rentZestimate":    rent,
+            "ratio":            ratio,
+            "score":            score_label(ratio),
+            "annualTax":        annual_tax,
+            "monthlyTax":       monthly_tax,
+            "taxRate":          tax_rate,
+            "isCityTax":        is_city_tax,
+            "bedrooms":         data.get("bedrooms"),
+            "bathrooms":        data.get("bathrooms"),
+            "livingArea":       data.get("livingArea") or data.get("floorSize"),
+            "homeType":         data.get("homeType"),
+            "homeStatus":       data.get("homeStatus"),
+            "statusText":       data.get("statusText", ""),
+            "isAuction":        False,
+            "imgSrc":           data.get("imgSrc") or (data.get("images") or [None])[0],
+            "detailUrl":        detail_url,
+            "daysOnZillow":     data.get("daysOnZillow"),
+            "lotAreaValue":     data.get("lotAreaValue"),
+            "lotAreaUnit":      data.get("lotAreaUnit"),
+            "taxAssessedValue": data.get("taxAssessedValue"),
+            "priceChange":      data.get("priceChange"),
+            "brokerName":       data.get("brokerName"),
+            "hasOpenHouse":     data.get("hasOpenHouse"),
+            "openHouseStartDate": data.get("openHouseStartDate"),
+            "latitude":         data.get("latitude"),
+            "longitude":        data.get("longitude"),
+            "yearBuilt":        data.get("yearBuilt"),
+        })
+
+    # Fall back to address search if no zpid found
     try:
         response = requests.post(
             f"https://{RAPIDAPI_HOST}/search/address",
             headers={**HEADERS, "Content-Type": "application/json"},
-            json={"location": address, "page": 1, "status": "for_sale"},
+            json={"location": url_or_address, "page": 1, "status": "for_sale"},
             timeout=20
         )
         response.raise_for_status()
@@ -494,7 +572,7 @@ def lookup_by_address():
         return jsonify({"error": str(e)}), 502
     raw = data.get("listings", [])
     if not raw:
-        return jsonify({"error": "No listings found for that address"}), 404
+        return jsonify({"error": "No listings found. Try pasting the Zillow URL instead."}), 404
     processed = process_listings(raw[:1])
     if not processed:
         return jsonify({"error": "Could not process listing"}), 404
