@@ -235,56 +235,104 @@ def get_tax_estimate(price, city, state):
     monthly = round(annual / 12)
     return annual, monthly, rate, is_city_level
 
-CACHE_DB = "cache.db"
 CACHE_TTL = 60 * 60 * 24
+DATABASE_URL = os.environ.get("DATABASE_URL")
 
+# ─────────────────────────────────────────────────────────────
+# Database — PostgreSQL if DATABASE_URL is set, else SQLite
+# PostgreSQL is used in production (Render), SQLite for local dev
+# ─────────────────────────────────────────────────────────────
 def get_db():
-    conn = sqlite3.connect(CACHE_DB)
-    conn.row_factory = sqlite3.Row
-    return conn
+    if DATABASE_URL:
+        import psycopg2
+        import psycopg2.extras
+        conn = psycopg2.connect(DATABASE_URL)
+        return conn
+    else:
+        conn = sqlite3.connect("cache.db")
+        conn.row_factory = sqlite3.Row
+        return conn
+
+def is_pg():
+    return DATABASE_URL is not None
 
 def init_db():
     conn = get_db()
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS cache (
-            key TEXT PRIMARY KEY,
-            data TEXT NOT NULL,
-            created_at INTEGER NOT NULL
-        )
-    """)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS favorites (
-            zpid TEXT PRIMARY KEY,
-            data TEXT NOT NULL,
-            status TEXT NOT NULL DEFAULT 'saved',
-            note TEXT,
-            added_at INTEGER NOT NULL
-        )
-    """)
+    cur = conn.cursor()
+    if is_pg():
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS cache (
+                key TEXT PRIMARY KEY,
+                data TEXT NOT NULL,
+                created_at BIGINT NOT NULL
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS favorites (
+                zpid TEXT PRIMARY KEY,
+                data TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'saved',
+                note TEXT,
+                added_at BIGINT NOT NULL
+            )
+        """)
+    else:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS cache (
+                key TEXT PRIMARY KEY,
+                data TEXT NOT NULL,
+                created_at INTEGER NOT NULL
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS favorites (
+                zpid TEXT PRIMARY KEY,
+                data TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'saved',
+                note TEXT,
+                added_at INTEGER NOT NULL
+            )
+        """)
     conn.commit()
     conn.close()
 
 init_db()
 
+def ph():
+    """Return the right placeholder — %s for postgres, ? for sqlite."""
+    return "%s" if is_pg() else "?"
+
 def cache_get(key):
     conn = get_db()
-    row = conn.execute("SELECT data, created_at FROM cache WHERE key=?", (key,)).fetchone()
+    cur = conn.cursor()
+    cur.execute(f"SELECT data, created_at FROM cache WHERE key={ph()}", (key,))
+    row = cur.fetchone()
     conn.close()
     if row:
-        if time.time() - row["created_at"] < CACHE_TTL:
-            return json.loads(row["data"])
+        data, created_at = row[0], row[1]
+        if time.time() - created_at < CACHE_TTL:
+            return json.loads(data)
         conn = get_db()
-        conn.execute("DELETE FROM cache WHERE key=?", (key,))
+        cur = conn.cursor()
+        cur.execute(f"DELETE FROM cache WHERE key={ph()}", (key,))
         conn.commit()
         conn.close()
     return None
 
 def cache_set(key, data):
     conn = get_db()
-    conn.execute(
-        "INSERT OR REPLACE INTO cache (key, data, created_at) VALUES (?, ?, ?)",
-        (key, json.dumps(data), int(time.time()))
-    )
+    cur = conn.cursor()
+    p = ph()
+    if is_pg():
+        cur.execute(
+            f"INSERT INTO cache (key, data, created_at) VALUES ({p},{p},{p}) ON CONFLICT (key) DO UPDATE SET data=EXCLUDED.data, created_at=EXCLUDED.created_at",
+            (key, json.dumps(data), int(time.time()))
+        )
+    else:
+        cur.execute(
+            f"INSERT OR REPLACE INTO cache (key, data, created_at) VALUES ({p},{p},{p})",
+            (key, json.dumps(data), int(time.time()))
+        )
     conn.commit()
     conn.close()
 
@@ -427,9 +475,14 @@ def search():
 @app.route("/favorites", methods=["GET"])
 def get_favorites():
     conn = get_db()
-    rows = conn.execute("SELECT * FROM favorites ORDER BY added_at DESC").fetchall()
+    cur = conn.cursor()
+    cur.execute("SELECT zpid, data, status, note, added_at FROM favorites ORDER BY added_at DESC")
+    rows = cur.fetchall()
     conn.close()
-    return jsonify([dict(r) | {"data": json.loads(r["data"])} for r in rows])
+    return jsonify([{
+        "zpid": r[0], "data": json.loads(r[1]),
+        "status": r[2], "note": r[3], "added_at": r[4]
+    } for r in rows])
 
 @app.route("/favorites", methods=["POST"])
 def add_favorite():
@@ -440,10 +493,18 @@ def add_favorite():
     if not prop or not prop.get("zpid"):
         return jsonify({"error": "Property data required"}), 400
     conn = get_db()
-    conn.execute(
-        "INSERT OR REPLACE INTO favorites (zpid, data, status, note, added_at) VALUES (?, ?, 'saved', ?, ?)",
-        (str(prop["zpid"]), json.dumps(prop), body.get("note", ""), int(time.time()))
-    )
+    cur = conn.cursor()
+    p = ph()
+    if is_pg():
+        cur.execute(
+            f"INSERT INTO favorites (zpid, data, status, note, added_at) VALUES ({p},{p},'saved',{p},{p}) ON CONFLICT (zpid) DO UPDATE SET data=EXCLUDED.data, note=EXCLUDED.note",
+            (str(prop["zpid"]), json.dumps(prop), body.get("note", ""), int(time.time()))
+        )
+    else:
+        cur.execute(
+            f"INSERT OR REPLACE INTO favorites (zpid, data, status, note, added_at) VALUES ({p},{p},'saved',{p},{p})",
+            (str(prop["zpid"]), json.dumps(prop), body.get("note", ""), int(time.time()))
+        )
     conn.commit()
     conn.close()
     return jsonify({"message": "Added to favorites"})
@@ -456,10 +517,12 @@ def update_favorite(zpid):
     status = body.get("status")
     note   = body.get("note")
     conn = get_db()
+    cur = conn.cursor()
+    p = ph()
     if status:
-        conn.execute("UPDATE favorites SET status=? WHERE zpid=?", (status, zpid))
+        cur.execute(f"UPDATE favorites SET status={p} WHERE zpid={p}", (status, zpid))
     if note is not None:
-        conn.execute("UPDATE favorites SET note=? WHERE zpid=?", (note, zpid))
+        cur.execute(f"UPDATE favorites SET note={p} WHERE zpid={p}", (note, zpid))
     conn.commit()
     conn.close()
     return jsonify({"message": "Updated"})
@@ -470,13 +533,19 @@ def remove_favorite(zpid):
     if not check_pin(body.get("pin")):
         return jsonify({"error": "Invalid PIN"}), 403
     conn = get_db()
-    conn.execute("DELETE FROM favorites WHERE zpid=?", (zpid,))
+    cur = conn.cursor()
+    cur.execute(f"DELETE FROM favorites WHERE zpid={ph()}", (zpid,))
     conn.commit()
     conn.close()
     return jsonify({"message": "Removed"})
 
 @app.route("/favorites/lookup", methods=["POST"])
 def lookup_by_address():
+    """
+    Look up a property by Zillow URL or address.
+    Reuses the same process_listings function as normal search
+    so the card data is identical to search results.
+    """
     body = request.get_json(force=True, silent=True) or {}
     url_or_address = (body.get("address") or "").strip()
     if not url_or_address:
@@ -484,159 +553,52 @@ def lookup_by_address():
 
     # Extract zpid from Zillow URL if provided
     # e.g. https://www.zillow.com/homedetails/address/12345678_zpid/
+    import re
     zpid = None
     if "zillow.com" in url_or_address:
-        import re
         match = re.search(r"/(\d+)_zpid", url_or_address)
         if match:
             zpid = match.group(1)
 
-    if zpid:
-        # Fetch property details and financial valuation in parallel
-        try:
-            details_resp = requests.get(
-                f"https://{RAPIDAPI_HOST}/property/details",
-                headers=HEADERS,
-                params={"zpid": zpid},
-                timeout=20
-            )
-            details_resp.raise_for_status()
-            data = details_resp.json()
-        except requests.exceptions.RequestException as e:
-            return jsonify({"error": str(e)}), 502
+    # Search using the URL directly or the address —
+    # pass it straight to the same search endpoint normal search uses
+    search_location = url_or_address
 
-        if not data:
-            return jsonify({"error": "Property not found"}), 404
-
-        # Second call to get zestimate + rentZestimate + images
-        try:
-            val_resp = requests.get(
-                f"https://{RAPIDAPI_HOST}/financial/valuation",
-                headers=HEADERS,
-                params={"zpid": zpid},
-                timeout=20
-            )
-            val_resp.raise_for_status()
-            val_data = val_resp.json()
-        except:
-            val_data = {}
-
-        # Also fetch images
-        try:
-            img_resp = requests.get(
-                f"https://{RAPIDAPI_HOST}/property/images",
-                headers=HEADERS,
-                params={"zpid": zpid},
-                timeout=20
-            )
-            img_resp.raise_for_status()
-            img_data = img_resp.json()
-        except:
-            img_data = {}
-
-        # Merge valuation data into main data
-        if val_data.get("zestimate"):
-            data["zestimate"] = val_data.get("zestimate")
-        if val_data.get("rentZestimate"):
-            data["rentZestimate"] = val_data.get("rentZestimate")
-
-        # Get first image
-        images = img_data.get("images") or img_data.get("photos") or []
-        if images and not data.get("imgSrc"):
-            first = images[0]
-            data["imgSrc"] = first.get("url") or first.get("src") or (first if isinstance(first, str) else None)
-
-        # Normalize property details response into our standard format
-        price  = data.get("price") or data.get("unformattedPrice")
-        rent   = data.get("rentZestimate")
-
-        # address can come back as a nested object or a plain string
-        raw_addr = data.get("address")
-        if isinstance(raw_addr, dict):
-            street   = raw_addr.get("streetAddress", "")
-            city     = raw_addr.get("city", "")
-            state    = raw_addr.get("state", "")
-            zipcode  = raw_addr.get("zipcode", "")
-            address  = f"{street}, {city}, {state} {zipcode}".strip(", ")
-        else:
-            address  = raw_addr or ""
-            street   = data.get("streetAddress", "")
-            city     = data.get("city", "")
-            state    = data.get("state", "")
-            zipcode  = data.get("zipcode", "")
-            if not address:
-                address = f"{street}, {city}, {state} {zipcode}".strip(", ")
-
-        annual_tax, monthly_tax, tax_rate, is_city_tax = get_tax_estimate(price, city, state)
-        ratio  = calculate_ratio(price, rent)
-
-        detail_url = data.get("hdpUrl") or data.get("detailUrl") or url_or_address
-        if detail_url and not detail_url.startswith("http"):
-            detail_url = f"https://www.zillow.com{detail_url}"
-
-        return jsonify({
-            "zpid":             zpid,
-            "address":          address,
-            "streetAddress":    street,
-            "city":             city,
-            "state":            state,
-            "zipcode":          zipcode,
-            "zipcode":          data.get("zipcode", ""),
-            "price":            price,
-            "zestimate":        data.get("zestimate"),
-            "rentZestimate":    rent,
-            "ratio":            ratio,
-            "score":            score_label(ratio),
-            "annualTax":        annual_tax,
-            "monthlyTax":       monthly_tax,
-            "taxRate":          tax_rate,
-            "isCityTax":        is_city_tax,
-            "bedrooms":         data.get("bedrooms"),
-            "bathrooms":        data.get("bathrooms"),
-            "livingArea":       data.get("livingArea") or data.get("floorSize"),
-            "homeType":         data.get("homeType"),
-            "homeStatus":       data.get("homeStatus"),
-            "statusText":       data.get("statusText", ""),
-            "isAuction":        False,
-            "imgSrc":           data.get("imgSrc") or (data.get("images") or [None])[0],
-            "detailUrl":        detail_url,
-            "daysOnZillow":     data.get("daysOnZillow"),
-            "lotAreaValue":     data.get("lotAreaValue"),
-            "lotAreaUnit":      data.get("lotAreaUnit"),
-            "taxAssessedValue": data.get("taxAssessedValue"),
-            "priceChange":      data.get("priceChange"),
-            "brokerName":       data.get("brokerName"),
-            "hasOpenHouse":     data.get("hasOpenHouse"),
-            "openHouseStartDate": data.get("openHouseStartDate"),
-            "latitude":         data.get("latitude"),
-            "longitude":        data.get("longitude"),
-            "yearBuilt":        data.get("yearBuilt"),
-        })
-
-    # Fall back to address search if no zpid found
     try:
         response = requests.post(
             f"https://{RAPIDAPI_HOST}/search/address",
             headers={**HEADERS, "Content-Type": "application/json"},
-            json={"location": url_or_address, "page": 1, "status": "for_sale"},
+            json={"location": search_location, "page": 1, "status": "for_sale"},
             timeout=20
         )
         response.raise_for_status()
         data = response.json()
     except requests.exceptions.RequestException as e:
         return jsonify({"error": str(e)}), 502
-    raw = data.get("listings", [])
+
+    raw = data.get("listings", data.get("results", []))
+
+    # If we have a zpid, find the matching listing
+    if zpid and raw:
+        matching = [h for h in raw if str(h.get("zpid", "")) == zpid]
+        if matching:
+            raw = matching[:1]
+
     if not raw:
-        return jsonify({"error": "No listings found. Try pasting the Zillow URL instead."}), 404
+        return jsonify({"error": "No listing found. Make sure the property is listed for sale on Zillow."}), 404
+
     processed = process_listings(raw[:1])
     if not processed:
         return jsonify({"error": "Could not process listing"}), 404
+
     return jsonify(processed[0])
+
 
 @app.route("/cache/clear", methods=["POST"])
 def clear_cache():
     conn = get_db()
-    conn.execute("DELETE FROM cache")
+    cur = conn.cursor()
+    cur.execute("DELETE FROM cache")
     conn.commit()
     conn.close()
     return jsonify({"message": "Cache cleared"})
@@ -644,10 +606,11 @@ def clear_cache():
 @app.route("/cache/stats", methods=["GET"])
 def cache_stats():
     conn = get_db()
-    total = conn.execute("SELECT COUNT(*) FROM cache").fetchone()[0]
-    size  = os.path.getsize(CACHE_DB) if os.path.exists(CACHE_DB) else 0
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM cache")
+    total = cur.fetchone()[0]
     conn.close()
-    return jsonify({"cached_queries": total, "db_size_kb": round(size / 1024, 1)})
+    return jsonify({"cached_queries": total})
 
 if __name__ == "__main__":
     app.run(debug=True, port=5001)
