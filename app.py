@@ -106,9 +106,9 @@ def calculate_ratio(price, rent):
 # Converts a ratio number into a score label used for
 # color-coding cards in the frontend:
 #   Excellent = 1%+ (great investment)
-#   Good      = 0.7–1%
-#   Fair      = 0.5–0.7%
-#   Poor      = under 0.5%
+#   Good      = 0.8–1%
+#   Fair      = 0.6–0.8%
+#   Poor      = under 0.6%
 #   Unknown   = no rent data available
 # ─────────────────────────────────────────────────────────────
 def score_label(ratio):

@@ -45,9 +45,9 @@ const PARKING = ["Any", "1+", "2+", "3+"];
 // ─────────────────────────────────────────────────────────────
 const scoreConfig = {
   excellent: { label: "Excellent ≥1%", color: "#14532d", bg: "#dcfce7", border: "#86efac", pin: "#16a34a" },
-  good:      { label: "Good ≥0.7%",    color: "#14532d", bg: "#f0fdf4", border: "#4ade80", pin: "#4ade80" },
-  fair:      { label: "Fair ≥0.5%",    color: "#713f12", bg: "#fefce8", border: "#fde047", pin: "#eab308" },
-  poor:      { label: "Poor <0.5%",    color: "#7f1d1d", bg: "#fef2f2", border: "#fca5a5", pin: "#ef4444" },
+  good:      { label: "Good ≥0.8%",    color: "#14532d", bg: "#f0fdf4", border: "#4ade80", pin: "#4ade80" },
+  fair:      { label: "Fair ≥0.6%",    color: "#713f12", bg: "#fefce8", border: "#fde047", pin: "#eab308" },
+  poor:      { label: "Poor <0.6%",    color: "#7f1d1d", bg: "#fef2f2", border: "#fca5a5", pin: "#ef4444" },
   unknown:   { label: "No Rent Data",  color: "#374151", bg: "#f3f4f6", border: "#d1d5db", pin: "#9ca3af" },
 };
 
