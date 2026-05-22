@@ -540,34 +540,139 @@ def remove_favorite(zpid):
 
 @app.route("/favorites/lookup", methods=["POST"])
 def lookup_by_address():
-    """
-    Look up a property by Zillow URL or address.
-    Reuses the same process_listings function as normal search
-    so the card data is identical to search results.
-    """
     body = request.get_json(force=True, silent=True) or {}
     url_or_address = (body.get("address") or "").strip()
     if not url_or_address:
         return jsonify({"error": "URL or address required"}), 400
 
-    # Extract zpid from Zillow URL if provided
-    # e.g. https://www.zillow.com/homedetails/address/12345678_zpid/
     import re
+
+    # ── If a Zillow URL is given, extract zpid and use /property/all ──
     zpid = None
     if "zillow.com" in url_or_address:
         match = re.search(r"/(\d+)_zpid", url_or_address)
         if match:
             zpid = match.group(1)
 
-    # Search using the URL directly or the address —
-    # pass it straight to the same search endpoint normal search uses
-    search_location = url_or_address
+    if zpid:
+        try:
+            resp = requests.get(
+                f"https://{RAPIDAPI_HOST}/property/all",
+                headers=HEADERS,
+                params={"zpid": zpid},
+                timeout=20
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        except requests.exceptions.RequestException as e:
+            return jsonify({"error": str(e)}), 502
 
+        if not data:
+            return jsonify({"error": "Property not found"}), 404
+
+        # Log top-level keys so we can see the response structure
+        import logging
+        logging.warning(f"property/all top keys: {list(data.keys())}")
+        logging.warning(f"rentZestimate direct: {data.get('rentZestimate')}")
+        logging.warning(f"hdpData keys: {list((data.get('hdpData') or {}).keys())}")
+
+        # Build address string — can be object or string
+        raw_addr = data.get("address")
+        if isinstance(raw_addr, dict):
+            street  = raw_addr.get("streetAddress", "")
+            city    = raw_addr.get("city", "")
+            state   = raw_addr.get("state", "")
+            zipcode = raw_addr.get("zipcode", "")
+        else:
+            street  = data.get("streetAddress", "")
+            city    = data.get("city", "")
+            state   = data.get("state", "")
+            zipcode = data.get("zipcode", "")
+
+        address = f"{street}, {city}, {state} {zipcode}".strip(", ")
+        if not address or address == ", ,  ":
+            address = raw_addr if isinstance(raw_addr, str) else "Unknown address"
+
+        # Price — check multiple locations in response
+        price = (data.get("price") or
+                 data.get("unformattedPrice") or
+                 (data.get("hdpData") or {}).get("homeInfo", {}).get("price") or
+                 (data.get("listing") or {}).get("price"))
+
+        # Rent zestimate — check multiple locations
+        rent = (data.get("rentZestimate") or
+                (data.get("hdpData") or {}).get("homeInfo", {}).get("rentZestimate") or
+                (data.get("listing") or {}).get("rentZestimate") or
+                (data.get("rentEstimate") or {}).get("rentZestimate"))
+
+        # Zestimate
+        zestimate = (data.get("zestimate") or
+                     (data.get("hdpData") or {}).get("homeInfo", {}).get("zestimate") or
+                     (data.get("listing") or {}).get("zestimate"))
+
+        # Image
+        img_src = data.get("imgSrc") or data.get("primaryPhoto")
+        if isinstance(img_src, dict):
+            img_src = img_src.get("url") or img_src.get("src")
+        if not img_src:
+            photos = data.get("photos") or data.get("images") or []
+            if photos:
+                first = photos[0]
+                if isinstance(first, dict):
+                    img_src = (first.get("url") or first.get("src") or
+                               ((first.get("mixedSources") or {}).get("jpeg") or [{}])[0].get("url"))
+                elif isinstance(first, str):
+                    img_src = first
+
+        detail_url = url_or_address  # use the original Zillow URL
+
+        ratio = calculate_ratio(price, rent)
+        annual_tax, monthly_tax, tax_rate, is_city_tax = get_tax_estimate(price, city, state)
+
+        return jsonify({
+            "zpid":             zpid,
+            "address":          address,
+            "streetAddress":    street,
+            "city":             city,
+            "state":            state,
+            "zipcode":          zipcode,
+            "price":            price,
+            "zestimate":        zestimate,
+            "rentZestimate":    rent,
+            "ratio":            ratio,
+            "score":            score_label(ratio),
+            "annualTax":        annual_tax,
+            "monthlyTax":       monthly_tax,
+            "taxRate":          tax_rate,
+            "isCityTax":        is_city_tax,
+            "bedrooms":         data.get("bedrooms"),
+            "bathrooms":        data.get("bathrooms"),
+            "livingArea":       data.get("livingArea") or data.get("floorSize"),
+            "homeType":         data.get("homeType"),
+            "homeStatus":       data.get("homeStatus"),
+            "statusText":       data.get("statusText", ""),
+            "isAuction":        False,
+            "imgSrc":           img_src,
+            "detailUrl":        detail_url,
+            "daysOnZillow":     data.get("daysOnZillow"),
+            "lotAreaValue":     data.get("lotAreaValue"),
+            "lotAreaUnit":      data.get("lotAreaUnit"),
+            "taxAssessedValue": data.get("taxAssessedValue"),
+            "priceChange":      data.get("priceChange"),
+            "brokerName":       data.get("brokerName"),
+            "hasOpenHouse":     data.get("hasOpenHouse"),
+            "openHouseStartDate": data.get("openHouseStartDate"),
+            "latitude":         data.get("latitude"),
+            "longitude":        data.get("longitude"),
+            "yearBuilt":        data.get("yearBuilt"),
+        })
+
+    # ── No zpid — fall back to address search ──
     try:
         response = requests.post(
             f"https://{RAPIDAPI_HOST}/search/address",
             headers={**HEADERS, "Content-Type": "application/json"},
-            json={"location": search_location, "page": 1, "status": "for_sale"},
+            json={"location": url_or_address, "page": 1, "status": "for_sale"},
             timeout=20
         )
         response.raise_for_status()
@@ -576,15 +681,8 @@ def lookup_by_address():
         return jsonify({"error": str(e)}), 502
 
     raw = data.get("listings", data.get("results", []))
-
-    # If we have a zpid, find the matching listing
-    if zpid and raw:
-        matching = [h for h in raw if str(h.get("zpid", "")) == zpid]
-        if matching:
-            raw = matching[:1]
-
     if not raw:
-        return jsonify({"error": "No listing found. Make sure the property is listed for sale on Zillow."}), 404
+        return jsonify({"error": "No listing found. Try pasting the full Zillow URL instead."}), 404
 
     processed = process_listings(raw[:1])
     if not processed:
