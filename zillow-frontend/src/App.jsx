@@ -532,8 +532,87 @@ function FavoritesTab({ onFavoriteAction, favoriteZpids }) {
   );
 }
 
+// ── Lock Screen ──────────────────────────────────────────────
+function LockScreen({ onUnlock }) {
+  const [pin, setPin] = useState("");
+  const [error, setError] = useState("");
+  const [shake, setShake] = useState(false);
+
+  const handleSubmit = () => {
+    if (pin.trim() === "lovemom") {
+      onUnlock();
+    } else {
+      setError("Incorrect PIN");
+      setShake(true);
+      setPin("");
+      setTimeout(() => setShake(false), 500);
+    }
+  };
+
+  return (
+    <div style={{
+      minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center",
+      background: "#0f172a", fontFamily: "'Georgia', serif",
+    }}>
+      <div style={{
+        background: "#fff", borderRadius: 16, padding: "40px 36px", width: 360,
+        boxShadow: "0 24px 80px rgba(0,0,0,0.4)",
+        animation: shake ? "shake 0.4s ease" : "none",
+      }}>
+        <style>{`
+          @keyframes shake {
+            0%,100% { transform: translateX(0); }
+            20% { transform: translateX(-8px); }
+            40% { transform: translateX(8px); }
+            60% { transform: translateX(-6px); }
+            80% { transform: translateX(6px); }
+          }
+        `}</style>
+        <div style={{ textAlign: "center", marginBottom: 28 }}>
+          <div style={{ fontSize: 40, marginBottom: 12 }}>🏡</div>
+          <h1 style={{ margin: "0 0 6px", fontSize: 22, fontWeight: 700, color: "#0f172a" }}>
+            Zillow Investment Finder
+          </h1>
+          <p style={{ margin: 0, fontSize: 13, color: "#94a3b8" }}>Enter your PIN to continue</p>
+        </div>
+        <input
+          type="password"
+          autoFocus
+          style={{
+            width: "100%", padding: "12px 14px", borderRadius: 10,
+            border: `1.5px solid ${error ? "#fca5a5" : "#e2e8f0"}`,
+            fontSize: 16, color: "#111827", background: "#fff",
+            outline: "none", boxSizing: "border-box", marginBottom: 10,
+            textAlign: "center", letterSpacing: "0.2em",
+          }}
+          placeholder="Enter PIN"
+          value={pin}
+          onChange={e => { setPin(e.target.value); setError(""); }}
+          onKeyDown={e => e.key === "Enter" && handleSubmit()}
+        />
+        {error && (
+          <p style={{ margin: "0 0 10px", fontSize: 13, color: "#dc2626", textAlign: "center" }}>{error}</p>
+        )}
+        <button
+          onClick={handleSubmit}
+          disabled={!pin.trim()}
+          style={{
+            width: "100%", padding: "12px", borderRadius: 10, border: "none",
+            background: pin.trim() ? "#0f172a" : "#e2e8f0",
+            color: pin.trim() ? "#fff" : "#94a3b8",
+            fontSize: 15, fontWeight: 600,
+            cursor: pin.trim() ? "pointer" : "not-allowed",
+            transition: "all 0.15s",
+          }}
+        >Unlock</button>
+      </div>
+    </div>
+  );
+}
+
 // ── Main App ─────────────────────────────────────────────────
 export default function App() {
+  const [unlocked, setUnlocked] = useState(false);
   const [activeTab, setActiveTab] = useState("search"); // "search" | "favorites"
 
   // Filter state
@@ -754,6 +833,10 @@ export default function App() {
     boxShadow: activeTab === tab ? "0 1px 4px rgba(0,0,0,0.15)" : "none",
     transition: "all 0.15s",
   });
+
+  if (!unlocked) {
+    return <LockScreen onUnlock={() => setUnlocked(true)} />;
+  }
 
   return (
     <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column", background: "#f8fafc", fontFamily: "'Georgia', serif" }}>
