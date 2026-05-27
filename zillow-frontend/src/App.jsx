@@ -814,7 +814,7 @@ export default function App() {
     return 0;
   });
 
-  const hasMore = results?.has_more && (results?.max_pages == null || currentPage < results.max_pages);
+  const hasMore = results?.max_pages != null ? currentPage < results.max_pages : results?.has_more;
   const hasResults = sorted.length > 0;
 
   const activeFilterCount = [
