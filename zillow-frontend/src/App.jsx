@@ -130,7 +130,7 @@ function PinModal({ title, onConfirm, onCancel }) {
 function PropertyMap({ listings, selectedZpid, onSelectPin }) {
   const mapRef = useRef(null);
   const mapInstanceRef = useRef(null);
-  const markersRef = React.useRef({});
+  const markersRef = useRef({});
   const [leafletReady, setLeafletReady] = useState(false);
 
   // Load Leaflet CSS + JS, set ready when done
