@@ -130,8 +130,10 @@ function PinModal({ title, onConfirm, onCancel }) {
 function PropertyMap({ listings, selectedZpid, onSelectPin }) {
   const mapRef = useRef(null);
   const mapInstanceRef = useRef(null);
-  const markersRef = useRef({});
+  const markersRef = React.useRef({});
+  const [leafletReady, setLeafletReady] = useState(false);
 
+  // Load Leaflet CSS + JS, set ready when done
   useEffect(() => {
     if (!document.getElementById("leaflet-css")) {
       const link = document.createElement("link");
@@ -139,46 +141,43 @@ function PropertyMap({ listings, selectedZpid, onSelectPin }) {
       link.href = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css";
       document.head.appendChild(link);
     }
-  }, []);
-
-  useEffect(() => {
-    if (mapInstanceRef.current) return;
-    if (!mapRef.current) return;
-
-    const initMap = () => {
-      const L = window.L;
-      if (!L || !mapRef.current || mapInstanceRef.current) return;
-      if (mapRef.current._leaflet_id) mapRef.current._leaflet_id = null;
-      try {
-        const map = L.map(mapRef.current, { zoomControl: true });
-        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-          attribution: "© OpenStreetMap contributors", maxZoom: 19,
-        }).addTo(map);
-        mapInstanceRef.current = map;
-      } catch(e) { console.warn("Map init error:", e); }
-    };
-
-    if (window.L) {
-      initMap();
-    } else if (!document.getElementById("leaflet-js")) {
+    if (window.L) { setLeafletReady(true); return; }
+    if (!document.getElementById("leaflet-js")) {
       const script = document.createElement("script");
       script.id = "leaflet-js";
       script.src = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js";
-      script.onload = initMap;
+      script.onload = () => setLeafletReady(true);
       document.head.appendChild(script);
     } else {
-      // Script is loading — poll until Leaflet is ready
       const interval = setInterval(() => {
-        if (window.L) { clearInterval(interval); initMap(); }
+        if (window.L) { clearInterval(interval); setLeafletReady(true); }
       }, 100);
       setTimeout(() => clearInterval(interval), 10000);
     }
-  }, [listings]); // re-run when listings arrive in case Leaflet wasn't ready on mount
+  }, []);
 
+  // Init map only after Leaflet is ready
   useEffect(() => {
+    if (!leafletReady || !mapRef.current || mapInstanceRef.current) return;
+    const L = window.L;
+    if (mapRef.current._leaflet_id) mapRef.current._leaflet_id = null;
+    try {
+      const map = L.map(mapRef.current, { zoomControl: true });
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        attribution: "© OpenStreetMap contributors", maxZoom: 19,
+      }).addTo(map);
+      mapInstanceRef.current = map;
+      setTimeout(() => map.invalidateSize(), 200);
+    } catch(e) { console.warn("Map init error:", e); }
+  }, [leafletReady]);
+
+  // Update markers when listings change
+  useEffect(() => {
+    if (!leafletReady) return;
     const L = window.L;
     if (!L || !mapInstanceRef.current) return;
     const map = mapInstanceRef.current;
+    setTimeout(() => map.invalidateSize(), 100);
     Object.values(markersRef.current).forEach(m => m.remove());
     markersRef.current = {};
     const valid = listings.filter(p => p.latitude && p.longitude);
@@ -211,10 +210,15 @@ function PropertyMap({ listings, selectedZpid, onSelectPin }) {
       markersRef.current[p.zpid] = marker;
       bounds.push([p.latitude, p.longitude]);
     });
-    if (bounds.length) map.fitBounds(bounds, { padding: [30, 30] });
-  }, [listings]);
+    if (bounds.length) {
+      map.fitBounds(bounds, { padding: [30, 30] });
+      setTimeout(() => map.invalidateSize(), 300);
+    }
+  }, [listings, leafletReady]);
 
+  // Highlight selected marker
   useEffect(() => {
+    if (!leafletReady) return;
     const L = window.L;
     if (!L || !selectedZpid) return;
     Object.entries(markersRef.current).forEach(([zpid, marker]) => {
@@ -226,7 +230,7 @@ function PropertyMap({ listings, selectedZpid, onSelectPin }) {
       const icon = L.divIcon({
         className: "",
         html: `<div style="background:${score.pin};border:${isSelected ? "3px solid #0f172a" : "2px solid white"};border-radius:50%;width:${size}px;height:${size}px;box-shadow:0 1px 4px rgba(0,0,0,0.4);cursor:pointer;"></div>`,
-        iconSize: [size, size], iconAnchor: [size/2, size/2],
+        iconSize: [size, size], iconAnchor: [size / 2, size / 2],
       });
       marker.setIcon(icon);
       if (isSelected) { marker.openPopup(); mapInstanceRef.current.panTo(marker.getLatLng()); }
@@ -235,6 +239,7 @@ function PropertyMap({ listings, selectedZpid, onSelectPin }) {
 
   return <div ref={mapRef} style={{ width: "100%", height: "100%", borderRadius: 12, zIndex: 0 }} />;
 }
+
 
 // ── Property Card ────────────────────────────────────────────
 function PropertyCard({ p, isSelected, onSelect, favoriteZpids, onFavoriteAction, showFavoriteControls = false, favoriteStatus }) {
@@ -793,6 +798,8 @@ export default function App() {
     finally { setLoading(false); }
   };
 
+  const resultsTopRef = useRef(null);
+
   const handleLoadMore = async () => {
     const nextPage = currentPage + 1;
     setLoadingMore(true);
@@ -800,6 +807,10 @@ export default function App() {
       const data = await fetchPage({ ...lastPayloadRef.current, page: nextPage });
       setAllListings(prev => [...prev, ...(data.results || [])]);
       setResults(data); setCurrentPage(nextPage);
+      // Scroll back to top of results after new ones load
+      setTimeout(() => {
+        resultsTopRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 100);
     } catch (e) { setError(e.message); }
     finally { setLoadingMore(false); }
   };
@@ -990,7 +1001,7 @@ export default function App() {
           {/* Results area */}
           {hasResults ? (
             <div style={{ display: "flex", minHeight: 0, flex: 1 }}>
-              <div style={{ width: showMap ? 420 : "100%", flexShrink: 0, padding: "16px", display: "flex", flexDirection: "column", gap: 12 }}>
+              <div ref={resultsTopRef} style={{ width: showMap ? 420 : "100%", flexShrink: 0, padding: "16px", display: "flex", flexDirection: "column", gap: 12 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
                   <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                     <p style={{ margin: 0, fontSize: 13, color: "#475569" }}>
